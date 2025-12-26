@@ -70,6 +70,8 @@ from sglang.srt.mem_cache.common import (
     evict_from_tree_cache,
     release_kv_cache,
 )
+from sglang.srt.mem_cache.common_compression import compress_batch
+from sglang.srt.mem_cache.compression.compressor_factory import AbstractCompressor
 from sglang.srt.mem_cache.mamba_radix_cache import MambaRadixCache
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.mem_cache.radix_cache import RadixKey
@@ -564,6 +566,12 @@ class Req:
         self.mamba_last_track_seqlen: Optional[int] = (
             None  # seq len of the last cached mamba state
         )
+
+        # NOTE[PAN]: Compressor memory pool info
+        self.compressed_req_pool_idx: Optional[int] = None
+        # NOTE[PAN]: prefix_indices are for prefix matching when the request first comes
+        # Then alloc_for_extend will allocate kv for new tokens, together written to req_pool_idx
+
         # the branching point seqlen to track mamba state. If set, given by prefix match,
         # it will be the tracked seqlen in the ping pong buffer for the right prefill pass.
         self.mamba_branching_seqlen: Optional[int] = None
@@ -1154,6 +1162,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     out_cache_loc: torch.Tensor = None  # shape: [b], int64
     output_ids: torch.Tensor = None  # shape: [b], int64
 
+    # NOTE[PAN]: For compression, optional
+    enable_compression: bool = False
+    compressed_req_pool_indices: Optional[torch.Tensor] = None
+    compressed_seq_lens: Optional[torch.Tensor] = None  # length of actual indices
+    compressed_seq_lens_sum: Optional[int] = None
+    compressed_req_to_token_pool: Optional[ReqToTokenPool] = None
+    compressor: Optional[AbstractCompressor] = None
+
     # For hybrid GDN prefix cache
     mamba_track_indices: torch.Tensor = None  # shape: [b], int64
     mamba_track_mask: torch.Tensor = None  # shape: [b], bool
@@ -1249,8 +1265,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         model_config: ModelConfig,
         enable_overlap: bool,
         spec_algorithm: SpeculativeAlgorithm,
+        enable_compression: bool = False,  # TODO[PAN]: Later enable more fine-grained control
         chunked_req: Optional[Req] = None,
         dllm_config: Optional[DllmConfig] = None,
+        compressed_req_to_token_pool: Optional[ReqToTokenPool] = None,
+        compressor: Optional[AbstractCompressor] = None,
     ):
         return_logprob = any(req.return_logprob for req in reqs)
 
@@ -1281,6 +1300,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             is_prefill_only=all(req.is_prefill_only for req in reqs),
             chunked_req=chunked_req,
             dllm_config=dllm_config,
+            enable_compression=enable_compression,
+            compressed_req_to_token_pool=compressed_req_to_token_pool,
+            compressor=compressor,
         )
 
     def batch_size(self):
@@ -1423,6 +1445,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         out_cache_loc, req_pool_indices_tensor, req_pool_indices = alloc_for_extend(
             self
         )
+        # TODO[PAN]: We need to maintain another set of indices
+        # Get compressed_req_pool_indices if compression is enabled from somewhere
+        # Consider this later when we enable compression for prefill
 
         # Set fields
         input_embeds = []
@@ -1886,6 +1911,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # Allocate memory
         self.out_cache_loc = alloc_for_decode(self, token_per_req=1)
 
+        # NOTE[PAN]: Check if the ongoing compression completes
+        # For now let's just compress it here, later we will improve it
+        if self.enable_compression:
+            compress_batch(self)
+
         # Update req-level memory management fields
         for req in self.reqs:
             req.kv_committed_len += 1
@@ -2127,10 +2157,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             mamba_track_indices=self.mamba_track_indices,
             mamba_track_mask=self.mamba_track_mask,
             mamba_track_seqlens=self.mamba_track_seqlens,
+            compressed_req_pool_indices=self.compressed_req_pool_indices,
+            compressed_seq_lens=self.compressed_seq_lens,
+            compressed_seq_lens_sum=self.compressed_seq_lens_sum,
         )
 
     def copy(self):
         # Only contain fields that will be used by process_batch_result
+        # TODO[PAN]: Check if compression will be used for process_batch_result
         return ScheduleBatch(
             reqs=self.reqs,
             req_to_token_pool=self.req_to_token_pool,
@@ -2184,6 +2218,11 @@ class ModelWorkerBatch:
     # The sequence length tensor on CPU
     seq_lens_cpu: Optional[torch.Tensor]
     seq_lens_sum: int
+
+    # NOTE[PAN]: For compression
+    compressed_req_pool_indices: Optional[torch.Tensor]
+    compressed_seq_lens: Optional[torch.Tensor]
+    compressed_seq_lens_sum: Optional[int]
 
     # For logprob
     return_logprob: bool

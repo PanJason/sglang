@@ -57,6 +57,7 @@ class SchedulerOutputProcessorMixin:
                     req.rid,
                     thread_finish_flag=True,
                 )
+                # TODO[PAN]: May require change
                 release_kv_cache(req, self.tree_cache)
 
         # Note: Logprobs should be handled on the prefill engine.
@@ -126,11 +127,16 @@ class SchedulerOutputProcessorMixin:
 
                     if req.finished():
                         self.maybe_collect_routed_experts(req)
+                        # TODO[PAN]: May need to change here
                         release_kv_cache(req, self.tree_cache)
                         req.time_stats.completion_time = time.perf_counter()
                     elif not batch.decoding_reqs or req not in batch.decoding_reqs:
                         # This updates radix so others can match
+                        # TODO[PAN]: May need to change here as it is the prefill req
+                        # in a mixed batch
                         self.tree_cache.cache_unfinished_req(req)
+                        # TODO[PAN]: We actually should compress here
+                        # compress(req)
 
                     if batch.return_logprob:
                         assert extend_logprob_start_len_per_req is not None
@@ -157,6 +163,7 @@ class SchedulerOutputProcessorMixin:
                         req.return_hidden_states
                         and logits_output.hidden_states is not None
                     ):
+                        # TODO[PAN]: May need to change here
                         req.hidden_states.append(
                             logits_output.hidden_states[
                                 hidden_state_offset : (
@@ -255,8 +262,10 @@ class SchedulerOutputProcessorMixin:
                     req.check_finished()
 
                     if req.finished():
+                        # TODO[PAN]: May need to change here
                         release_kv_cache(req, self.tree_cache)
                     else:
+                        # TODO[PAN]: May need to change here
                         self.tree_cache.cache_unfinished_req(req)
                 else:
                     # being chunked reqs' prefill is not finished
@@ -316,6 +325,7 @@ class SchedulerOutputProcessorMixin:
             req.output_ids.append(next_token_id)
             req.check_finished()
 
+            # TODO[PAN]: Need to skip here
             if req.finished():
                 release_kv_cache(req, self.tree_cache)
                 req.time_stats.completion_time = time.perf_counter()
@@ -377,6 +387,7 @@ class SchedulerOutputProcessorMixin:
                 new_accepted_len = len(next_token_id)
 
             # Update Mamba last track seqlen
+            # TODO[PAN]: Check mamba cache
             self._mamba_prefix_cache_update(req, batch, result, i)
 
             req.check_finished(new_accepted_len)
@@ -384,6 +395,7 @@ class SchedulerOutputProcessorMixin:
             if req.finished():
                 self.maybe_collect_routed_experts(req)
 
+                # TODO[PAN]: May need to change here
                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
                     # Asynchronously offload KV cache; release_kv_cache will be called after Device->Host transfer completes
                     if not self.decode_offload_manager.offload_kv_cache(req):
@@ -392,6 +404,12 @@ class SchedulerOutputProcessorMixin:
                     release_kv_cache(req, self.tree_cache)
 
                 req.time_stats.completion_time = time.perf_counter()
+            else:
+                # NOTE[PAN]: Compress here
+                # TODO[PAN]: We actually should compress here instead of
+                # in scheduler
+                # compress(req)
+                pass
 
             if req.return_logprob and batch.spec_algorithm.is_none():
                 # speculative worker handles logprob in speculative decoding

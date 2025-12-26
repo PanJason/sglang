@@ -174,6 +174,9 @@ class TritonAttnBackend(AttentionBackend):
 
         self.cuda_graph_custom_mask = None
 
+        # NOTE[PAN]: Initialize compression info
+        self.compressed_req_to_token_pool = model_runner.compressed_req_to_token_pool
+
     def get_num_kv_splits(
         self,
         num_kv_splits: torch.Tensor,
@@ -239,20 +242,54 @@ class TritonAttnBackend(AttentionBackend):
 
         if forward_batch.forward_mode.is_decode_or_idle():
             if spec_info is None:
-                kv_indptr[1 : bs + 1] = torch.cumsum(forward_batch.seq_lens, dim=0)
-                kv_indptr = kv_indptr[: bs + 1]
-                kv_indices = torch.empty(
-                    forward_batch.seq_lens_sum, dtype=torch.int64, device=self.device
-                )
-                create_flashinfer_kv_indices_triton[(bs,)](
-                    self.req_to_token,
-                    forward_batch.req_pool_indices,
-                    forward_batch.seq_lens,
-                    kv_indptr,
-                    None,
-                    kv_indices,
-                    self.req_to_token.stride(0),
-                )
+                # TODO[PAN]: Used the compressed indices here.
+                # _pad_inputs_to_size needs to be handled later for
+                # CUDA graph, dp, tp_scatter, etc.
+                if (
+                    self.compressed_req_to_token_pool is not None
+                    and forward_batch.compressed_req_pool_indices is not None
+                    and forward_batch.compressed_seq_lens is not None
+                    and forward_batch.compressed_seq_lens_sum is not None
+                    and
+                    # No sliding window for now
+                    self.sliding_window_size is None
+                ):
+                    # NOTE[PAN]: Compression pass
+                    kv_indptr[1 : bs + 1] = torch.cumsum(
+                        forward_batch.compressed_seq_lens, dim=0
+                    )
+                    kv_indptr = kv_indptr[: bs + 1]
+                    kv_indices = torch.empty(
+                        forward_batch.compressed_seq_lens_sum,
+                        dtype=torch.int64,
+                        device=self.device,
+                    )
+                    create_flashinfer_kv_indices_triton[(bs,)](
+                        self.compressed_req_to_token_pool.req_to_token,
+                        forward_batch.compressed_req_pool_indices,
+                        forward_batch.compressed_seq_lens,
+                        kv_indptr,
+                        None,
+                        kv_indices,
+                        self.compressed_req_to_token_pool.req_to_token.stride(0),
+                    )
+                else:
+                    kv_indptr[1 : bs + 1] = torch.cumsum(forward_batch.seq_lens, dim=0)
+                    kv_indptr = kv_indptr[: bs + 1]
+                    kv_indices = torch.empty(
+                        forward_batch.seq_lens_sum,
+                        dtype=torch.int64,
+                        device=self.device,
+                    )
+                    create_flashinfer_kv_indices_triton[(bs,)](
+                        self.req_to_token,
+                        forward_batch.req_pool_indices,
+                        forward_batch.seq_lens,
+                        kv_indptr,
+                        None,
+                        kv_indices,
+                        self.req_to_token.stride(0),
+                    )
                 # Sliding window
                 if (
                     self.sliding_window_size is not None
@@ -369,6 +406,7 @@ class TritonAttnBackend(AttentionBackend):
             attn_logits = None
             attn_lse = None
         else:
+            # TODO[PAN]: We need to compressed the matched prefix
             kv_indptr[1 : bs + 1] = torch.cumsum(
                 forward_batch.extend_prefix_lens, dim=0
             )

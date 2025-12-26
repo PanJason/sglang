@@ -235,6 +235,7 @@ class ForwardBatch:
     input_ids: torch.Tensor
     # The indices of requests in the req_to_token_pool
     req_pool_indices: torch.Tensor
+
     # The sequence length
     seq_lens: torch.Tensor
     # The indices of output tokens in the token_to_kv_pool
@@ -242,6 +243,13 @@ class ForwardBatch:
 
     # The sum of all sequence lengths
     seq_lens_sum: int
+
+    # NOTE[PAN]: Here sglang indices to the req_to_token_pool for indices.
+    # We use something similar to indice to the compressed indices
+    compressed_req_to_token_pool: Optional[ReqToTokenPool] = None
+    compressed_req_pool_indices: Optional[torch.Tensor] = None
+    compressed_seq_lens: Optional[torch.Tensor] = None
+    compressed_seq_lens_sum: Optional[int] = None
 
     # The original sequence length without being chunked. Qwen-1M related.
     orig_seq_lens: Optional[torch.Tensor] = None
@@ -439,6 +447,11 @@ class ForwardBatch:
             tbo_split_seq_index=batch.tbo_split_seq_index,
             dimensions=batch.dimensions,
             return_hidden_states_before_norm=batch.return_hidden_states_before_norm,
+            # NOTE[PAN]: For compression:
+            compressed_req_to_token_pool=model_runner.compressed_req_to_token_pool,
+            compressed_req_pool_indices=batch.compressed_req_pool_indices,
+            compressed_seq_lens=batch.compressed_seq_lens,
+            compressed_seq_lens_sum=batch.compressed_seq_lens_sum,
         )
         device = model_runner.device
 

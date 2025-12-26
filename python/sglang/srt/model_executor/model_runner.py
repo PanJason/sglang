@@ -115,6 +115,8 @@ from sglang.srt.mem_cache.allocator import (
     SWATokenToKVPoolAllocator,
     TokenToKVPoolAllocator,
 )
+from sglang.srt.mem_cache.common_compression import AbstractCompressor
+from sglang.srt.mem_cache.compression.compressor_factory import get_compressor_from_name
 from sglang.srt.mem_cache.memory_pool import (
     DoubleSparseTokenToKVPool,
     HybridLinearKVPool,
@@ -341,6 +343,9 @@ class ModelRunner:
         self.init_new_workspace = False
         self.kv_cache_memory = 0
         self.draft_model_idx = draft_model_idx
+        # NOTE[PAN]: For compression
+        self.compressed_req_to_token_pool: Optional[ReqToTokenPool] = None
+        self.compressor: Optional[AbstractCompressor] = None
 
         self.remote_instance_transfer_engine = None
         self.remote_instance_transfer_engine_session_id = ""
@@ -1987,6 +1992,20 @@ class ModelRunner:
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
                 )
+                # NOTE[PAN]: Optionally enable compressed pool
+                if self.server_args.enable_compression:
+                    self.compressed_req_to_token_pool = ReqToTokenPool(
+                        size=max_num_reqs,
+                        max_context_len=self.model_config.context_len
+                        + extra_max_context_len,
+                        device=self.device,
+                        enable_memory_saver=self.server_args.enable_memory_saver,
+                    )
+                    # TODO[PAN]: Initialize compressor as well
+                    self.compressor = get_compressor_from_name(
+                        self.server_args.compression_method
+                    )
+
         else:
             # Draft worker shares req_to_token_pool with the target worker.
             assert self.is_draft_worker

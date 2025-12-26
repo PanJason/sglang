@@ -311,6 +311,9 @@ class ServerArgs:
     swa_full_tokens_ratio: float = 0.8
     disable_hybrid_swa_memory: bool = False
     radix_eviction_policy: str = "lru"
+    # NOTE[PAN]: For compression
+    enable_compression: bool = False
+    compression_method: str = "dummy"
 
     # Runtime options
     device: Optional[str] = None
@@ -2782,6 +2785,19 @@ class ServerArgs:
             choices=RADIX_EVICTION_POLICY_CHOICES,
             default=ServerArgs.radix_eviction_policy,
             help="The eviction policy of radix trees. 'lru' stands for Least Recently Used, 'lfu' stands for Least Frequently Used.",
+        )
+        parser.add_argument(
+            "--enable-compression",
+            action="store_true",
+            default=ServerArgs.enable_compression,
+            help="Enable KV cache compression.",
+        )
+        parser.add_argument(
+            "--compression-method",
+            type=str,
+            choices=["snapkv", "kvzip", "random", "truncate", "dummy"],
+            default=ServerArgs.compression_method,
+            help="Compression method to use when compression is enabled.",
         )
 
         # Runtime options

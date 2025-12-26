@@ -600,6 +600,15 @@ class Scheduler(
             self.tp_worker.get_memory_pool()
         )
 
+        # NOTE[PAN]: For compression
+        if server_args.enable_compression:
+            self.compressed_req_to_token_pool = (
+                self.tp_worker.get_compressed_token_pool()
+            )
+            self.compressor = self.tp_worker.get_compressor()
+        else:
+            self.compressed_req_to_token_pool = None
+
         # Create cache
         params = CacheInitParams(
             disable=server_args.disable_radix_cache,
@@ -2016,6 +2025,9 @@ class Scheduler(
             self.spec_algorithm,
             chunked_req=self.chunked_req,
             dllm_config=self.dllm_config,
+            enable_compression=self.server_args.enable_compression,
+            compressed_req_to_token_pool=self.compressed_req_to_token_pool,
+            compressor=self.compressor,
         )
         if self.enable_hierarchical_cache:
             # todo (zhiqiang): disable cuda graph execution if hicache loading triggered
