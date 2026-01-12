@@ -608,6 +608,7 @@ class Scheduler(
             self.compressor = self.tp_worker.get_compressor()
         else:
             self.compressed_req_to_token_pool = None
+            self.compressor = None
 
         # Create cache
         params = CacheInitParams(
